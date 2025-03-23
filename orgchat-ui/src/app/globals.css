@@ -1,0 +1,12 @@
+/* src/app/globals.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body {
+  @apply h-full;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+}
