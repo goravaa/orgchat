@@ -1,11 +1,16 @@
+// src/app/api/chat/route.ts
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
 import OpenAI from 'openai'
-import { error } from 'console'
+import { createClient } from '@supabase/supabase-js'
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 })
+
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY! 
+)
 
 export async function POST(req: Request) {
   const { conversationId, userMessage } = await req.json()
@@ -20,30 +25,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: false, error: 'Missing access token' }, { status: 401 })
   }
 
-  // Use Supabase SSR client with access token
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get: () => undefined,
-        set: () => {},
-        remove: () => {},
-      },
-    }
-  )
-
   try {
-    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    const { data: { user }, error: userError } = await supabaseAdmin.auth.getUser(token)
 
-  if (!user) {
-    return NextResponse.json({ success: false, error: error}, { status: 401 })
-  }
-    // -- rest of your logic unchanged --
-    // insert user message, fetch all messages, call OpenAI, save assistant reply
+    if (!user || userError) {
+      return NextResponse.json({ success: false, error: 'Invalid user' }, { status: 401 })
+    }
 
     // 1. Insert user message
-    await supabase.from('messages').insert({
+    await supabaseAdmin.from('messages').insert({
       conversation_id: conversationId,
       user_id: user.id,
       role: 'user',
@@ -51,7 +41,7 @@ export async function POST(req: Request) {
     })
 
     // 2. Fetch full context
-    const { data: conversationMessages } = await supabase
+    const { data: conversationMessages } = await supabaseAdmin
       .from('messages')
       .select('role, content')
       .eq('conversation_id', conversationId)
@@ -73,7 +63,7 @@ export async function POST(req: Request) {
 
     const assistantReply = aiRes.choices[0].message?.content || 'No reply'
 
-    const { data: insertedAssistant } = await supabase
+    const { data: insertedAssistant } = await supabaseAdmin
       .from('messages')
       .insert({
         conversation_id: conversationId,
@@ -88,12 +78,12 @@ export async function POST(req: Request) {
       success: true,
       assistantMessage: insertedAssistant,
     })
-    } catch (err) {
-      if (err instanceof Error) {
-        console.error('[ERROR]', err.message)
-      } else {
-        console.error('[ERROR]', err)
-      }
-      return NextResponse.json({ success: false, error: err instanceof Error ? err.message : 'Unknown error' }, { status: 500 })
+  } catch (err) {
+    if (err instanceof Error) {
+      console.error('[ERROR]', err.message)
+    } else {
+      console.error('[ERROR]', err)
+    }
+    return NextResponse.json({ success: false, error: err instanceof Error ? err.message : 'Unknown error' }, { status: 500 })
   }
 }
