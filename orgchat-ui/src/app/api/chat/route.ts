@@ -9,8 +9,11 @@ const openai = new OpenAI({
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY! 
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
+
+const MAX_CONTEXT_TOKENS = 4096
+const PINNED_CONTEXT_LIMIT = 2048
 
 export async function POST(req: Request) {
   const { conversationId, userMessage } = await req.json()
@@ -32,7 +35,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: 'Invalid user' }, { status: 401 })
     }
 
-    // 1. Insert user message
+    // Fetch model and pin status from conversation
+    const { data: convo } = await supabaseAdmin
+      .from('conversations')
+      .select('model, is_pinned')
+      .eq('id', conversationId)
+      .single()
+
+    const model = convo?.model || 'gpt-3.5-turbo'
+    const isPinned = convo?.is_pinned || false
+
+    // Insert user message
     await supabaseAdmin.from('messages').insert({
       conversation_id: conversationId,
       user_id: user.id,
@@ -40,7 +53,7 @@ export async function POST(req: Request) {
       content: userMessage,
     })
 
-    // 2. Fetch full context
+    // Fetch full context
     const { data: conversationMessages } = await supabaseAdmin
       .from('messages')
       .select('role, content')
@@ -51,13 +64,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: 'Failed to fetch conversation messages' }, { status: 500 })
     }
 
-    const openAiMessages = conversationMessages.map((msg) => ({
-      role: msg.role,
-      content: msg.content,
-    }))
+    let openAiMessages = []
+    let tokenCount = 0
+
+    // If pinned, intelligently trim earlier messages for context
+    for (let i = conversationMessages.length - 1; i >= 0; i--) {
+      const msg = conversationMessages[i]
+      const tokens = Math.ceil(msg.content.length / 4)
+      if (tokenCount + tokens > (isPinned ? PINNED_CONTEXT_LIMIT : MAX_CONTEXT_TOKENS)) break
+      openAiMessages.unshift({ role: msg.role, content: msg.content })
+      tokenCount += tokens
+    }
 
     const aiRes = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model,
       messages: openAiMessages,
     })
 
