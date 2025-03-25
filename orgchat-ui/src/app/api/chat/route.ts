@@ -12,8 +12,9 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-const MAX_CONTEXT_TOKENS = 4096
-const PINNED_CONTEXT_LIMIT = 2048
+const MAX_CONTEXT_TOKENS = 2000
+const PINNED_CONTEXT_LIMIT = 1000
+const CHUNK_CONTEXT_LIMIT = 3
 
 export async function POST(req: Request) {
   const { conversationId, userMessage } = await req.json()
@@ -53,7 +54,24 @@ export async function POST(req: Request) {
       content: userMessage,
     })
 
-    // Fetch full context
+    // Embed user message for semantic search
+    const embeddingRes = await openai.embeddings.create({
+      model: 'text-embedding-3-small',
+      input: userMessage,
+    })
+
+    const userEmbedding = embeddingRes.data[0].embedding
+
+    // Fetch top relevant chunks via pgvector similarity search
+    const { data: chunks } = await supabaseAdmin.rpc('match_document_chunks', {
+      query_embedding: userEmbedding,
+      match_threshold: 0.78,
+      match_count: CHUNK_CONTEXT_LIMIT,
+    })
+
+    const vectorContext = chunks?.map((chunk: any) => chunk.content).join('\n---\n') || ''
+
+    // Fetch full message context
     const { data: conversationMessages } = await supabaseAdmin
       .from('messages')
       .select('role, content')
@@ -66,6 +84,14 @@ export async function POST(req: Request) {
 
     let openAiMessages = []
     let tokenCount = 0
+
+    // Prepend vector chunks as system message if found
+    if (vectorContext) {
+      openAiMessages.push({
+        role: 'system',
+        content: `You can refer to the following document context when answering the user:\n\n${vectorContext}`,
+      })
+    }
 
     // If pinned, intelligently trim earlier messages for context
     for (let i = conversationMessages.length - 1; i >= 0; i--) {

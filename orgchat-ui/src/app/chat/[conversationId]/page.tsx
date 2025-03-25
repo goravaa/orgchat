@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '../../util/supabase'
-
+import FileUpload from '../../components/FileUpload'
 export default function ChatPage() {
   const router = useRouter()
   const { conversationId } = useParams() as { conversationId: string }
@@ -75,7 +75,7 @@ export default function ChatPage() {
           </div>
         ))}
       </div>
-
+      <FileUpload conversationId={conversationId} />
       {/* INPUT BOX */}
       <form
         onSubmit={(e) => {
